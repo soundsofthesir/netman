@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Check tag
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "Tag $env:TAG is not vX.Y.Z" }
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $version = $env:TAG.Substring(1)
+          dotnet publish src/NetMan.App -c Release -r win-x64 --self-contained "-p:Version=$version" -o out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash out/NetMan.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path out/NetMan.exe.sha256 -Value "$hash  NetMan.exe" -Encoding ascii -NoNewline
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:TAG" out/NetMan.exe out/NetMan.exe.sha256 --generate-notes

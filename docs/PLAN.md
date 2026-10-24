@@ -81,6 +81,16 @@ Every apply runs the same pipeline. Each step reports into the result panel.
 
 Every apply writes the commands, their output and each check to `%APPDATA%\NetMan\log.txt`.
 
+## Updates
+
+Releases live at github.com/soundsofthesir/netman (public). A tag `vX.Y.Z` runs the release workflow, which tests, publishes the self-contained exe, and attaches `NetMan.exe` and `NetMan.exe.sha256` to a GitHub release.
+
+1. On launch and every 12 hours, a background task reads the latest release from the GitHub API.
+2. If it is newer, it downloads `NetMan.exe` to `%LOCALAPPDATA%\NetMan\updates`, checks it against the release's SHA-256 file and records it as pending.
+3. An "Update to X.Y.Z" button appears under Reset to DHCP. It installs now and restarts. Otherwise the next launch installs before the window opens.
+4. Install renames the running exe to `NetMan.exe.old`, copies the new one into place and starts it. If the copy fails, the old exe is put back. The next launch deletes `NetMan.exe.old`.
+5. Version 0.0.0 marks a development build, which never checks for updates. Every step goes to the log.
+
 ## Technical approach
 
 - C# on .NET 10 (LTS), WinForms, one self-contained `NetMan.exe`, built from macOS with `EnableWindowsTargeting`.

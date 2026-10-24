@@ -16,15 +16,16 @@ internal static class Program
             return;
         }
 
-        var reader = new WindowsAdapterReader();
-        var pipeline = new ApplyPipeline(
-            reader,
-            AppPaths.CreateNetsh(),
-            new Pinger(),
-            new ApplyLog(AppPaths.Log),
-            TimeProvider.System,
-            ApplyTimings.Default);
+        var log = new ApplyLog(AppPaths.Log);
+        var updater = Updater.Create(log);
+        if (updater?.InstallPendingAndRestart() == true)
+        {
+            return;
+        }
 
-        Application.Run(new MainForm(new ProfileStore(AppPaths.Profiles), reader, pipeline));
+        var reader = new WindowsAdapterReader();
+        var pipeline = new ApplyPipeline(reader, AppPaths.CreateNetsh(), new Pinger(), log, TimeProvider.System, ApplyTimings.Default);
+
+        Application.Run(new MainForm(new ProfileStore(AppPaths.Profiles), reader, pipeline, updater));
     }
 }

@@ -10,12 +10,15 @@ internal sealed class MainForm : Form
     private readonly ProfileStore _store;
     private readonly IAdapterReader _reader;
     private readonly ApplyPipeline _pipeline;
+    private readonly Updater? _updater;
     private readonly AdapterWatcher _watcher = new(AdapterWatcher.DefaultInterval);
     private readonly CancellationTokenSource _closing = new();
     private readonly Font _bold;
 
     private readonly AdapterList _adapterList = new() { Dock = DockStyle.Fill, Margin = new Padding(0) };
     private readonly Button _reset = Theme.Button("Reset to DHCP", 210);
+    private readonly Button _update = Theme.Button("", 210);
+    private readonly System.Windows.Forms.Timer _updateTimer = new() { Interval = (int)TimeSpan.FromHours(12).TotalMilliseconds };
     private readonly FlowLayoutPanel _profiles = new()
     {
         Dock = DockStyle.Fill,
@@ -40,15 +43,17 @@ internal sealed class MainForm : Form
     private readonly Dictionary<Guid, ApplyReport> _reports = [];
     private Guid? _selectedProfile;
     private string? _loadError;
+    private PendingUpdate? _pendingUpdate;
     private bool _busy;
     private bool _settingAdapters;
     private int _refreshQueued;
 
-    public MainForm(ProfileStore store, IAdapterReader reader, ApplyPipeline pipeline)
+    public MainForm(ProfileStore store, IAdapterReader reader, ApplyPipeline pipeline, Updater? updater)
     {
         _store = store;
         _reader = reader;
         _pipeline = pipeline;
+        _updater = updater;
         _bold = new Font(Font, FontStyle.Bold);
         _result = new ResultPanel(_bold) { Dock = DockStyle.Fill, Margin = new Padding(0, Theme.Gap, 0, 0) };
 
@@ -61,6 +66,11 @@ internal sealed class MainForm : Form
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Window;
+        if (Environment.ProcessPath is { } exe)
+        {
+            Icon = Icon.ExtractAssociatedIcon(exe);
+        }
+
         Controls.Add(BuildLayout());
         ResumeLayout(performLayout: true);
 
@@ -75,13 +85,18 @@ internal sealed class MainForm : Form
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0, 0, 12, 0) };
+        var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = new Padding(0, 0, 12, 0) };
         left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _reset.Margin = new Padding(0, Theme.Gap, 0, 0);
         _reset.Dock = DockStyle.Fill;
+        _update.Margin = new Padding(0, Theme.Gap, 0, 0);
+        _update.Dock = DockStyle.Fill;
+        _update.Visible = false;
         left.Controls.Add(_adapterList, 0, 0);
         left.Controls.Add(_reset, 0, 1);
+        left.Controls.Add(_update, 0, 2);
 
         var profilesBox = new Panel { Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, BackColor = Theme.Surface, Margin = new Padding(0) };
         profilesBox.Controls.Add(_profiles);
@@ -143,7 +158,9 @@ internal sealed class MainForm : Form
         _copyTo.Click += (_, _) => WithSelected(ShowCopyMenu);
         _delete.Click += (_, _) => WithSelected(DeleteProfile);
         _watcher.Changed += (_, _) => QueueRefresh();
-        Shown += (_, _) =>
+        _update.Click += (_, _) => InstallUpdateNow();
+        _updateTimer.Tick += async (_, _) => await CheckForUpdateAsync();
+        Shown += async (_, _) =>
         {
             if (_loadError is not null)
             {
@@ -151,6 +168,11 @@ internal sealed class MainForm : Form
             }
 
             RefreshAll();
+            if (_updater is not null)
+            {
+                _updateTimer.Start();
+                await CheckForUpdateAsync();
+            }
         };
     }
 
@@ -319,6 +341,54 @@ internal sealed class MainForm : Form
         _reset.Enabled = idle && adapter is not null;
         _edit.Enabled = _duplicate.Enabled = _delete.Enabled = idle && profile is not null;
         _copyTo.Enabled = idle && profile is not null && _adapters.Any(a => a.Id != profile.AdapterId);
+        _update.Enabled = idle;
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        if (_updater is null || _pendingUpdate is not null)
+        {
+            return;
+        }
+
+        PendingUpdate? pending;
+        try
+        {
+            pending = await Task.Run(() => _updater.CheckAsync(_closing.Token));
+        }
+        catch (OperationCanceledException) when (_closing.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (pending is null || IsDisposed)
+        {
+            return;
+        }
+
+        _pendingUpdate = pending;
+        _update.Text = $"Update to {pending.Version}";
+        _update.Visible = true;
+    }
+
+    private void InstallUpdateNow()
+    {
+        if (_busy || _updater is null || _pendingUpdate is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _updater.InstallAndRestart(_pendingUpdate);
+        }
+        catch (Exception ex) when (Updater.IsInstallError(ex))
+        {
+            Error(ex.Message);
+            return;
+        }
+
+        Close();
     }
 
     private async Task RunAsync(string name, Func<CancellationToken, Task<ApplyReport>> action)
@@ -462,6 +532,7 @@ internal sealed class MainForm : Form
         if (disposing)
         {
             _watcher.Dispose();
+            _updateTimer.Dispose();
             _closing.Cancel();
             _closing.Dispose();
             _copyMenu.Dispose();
