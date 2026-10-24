@@ -79,15 +79,16 @@ Every apply writes the commands, their output and each check to `%APPDATA%\NetMa
 
 - C# on .NET 10 (LTS), WinForms, one self-contained `NetMan.exe`, built from macOS with `EnableWindowsTargeting`.
 - App manifest with `requireAdministrator`.
-- Adapters and live config: `NetworkInterface` and `GetIPProperties()`, keyed by interface GUID. DAD state from `UnicastIPAddressInformation.DuplicateAddressDetectionState`. Stored config for disconnected adapters from `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}`.
+- Adapters and live config: `NetworkInterface` and `GetIPProperties()`, keyed by interface GUID. DAD state from `UnicastIPAddressInformation.DuplicateAddressDetectionState`. Stored config for disconnected adapters from `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}`. Virtual and hidden adapters are filtered out using the `Characteristics` flags under the network adapter device class key.
 - Apply: `netsh` with an argument list, no shell string, using the adapter's current name resolved from its GUID. Parse exit codes, not text, because netsh output is localized.
 - Profiles: `%APPDATA%\NetMan\profiles.json`, written to a temp file then renamed. Each profile stores adapter GUID plus name. If neither matches, the profile shows under "Not found" and Copy to moves it to a present adapter.
 
 ### Projects
 
 ```
-src/NetMan.Core/          Profile model, validation, JSON store, netsh builder, verifier logic
-src/NetMan.App/           WinForms UI, adapter reader, process runner, ping
+src/NetMan.Core/          Model, validation, store, netsh builder, verifier, process runner, ping, log,
+                          registry and NetworkInterface mapping (cross-platform, tested on macOS)
+src/NetMan.App/           WinForms UI and Windows-only code: adapter reader, registry access, watcher, elevation
 tests/NetMan.Core.Tests/  xUnit
 ```
 
