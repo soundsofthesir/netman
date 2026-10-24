@@ -1,4 +1,5 @@
 using NetMan.App.Platform;
+using NetMan.Core;
 
 namespace NetMan.App;
 
@@ -15,6 +16,15 @@ internal static class Program
             return;
         }
 
-        Application.Run(new MainForm());
+        var reader = new WindowsAdapterReader();
+        var pipeline = new ApplyPipeline(
+            reader,
+            AppPaths.CreateNetsh(),
+            new Pinger(),
+            new ApplyLog(AppPaths.Log),
+            TimeProvider.System,
+            ApplyTimings.Default);
+
+        Application.Run(new MainForm(new ProfileStore(AppPaths.Profiles), reader, pipeline));
     }
 }
