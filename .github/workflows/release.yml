@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Check tag
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "Tag $env:TAG is not vX.Y.Z" }
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $version = $env:TAG.Substring(1)
+          dotnet publish src/NetMan.App -c Release -r win-x64 --self-contained "-p:Version=$version" -o out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash out/NetMan.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path out/NetMan.exe.sha256 -Value "$hash  NetMan.exe" -Encoding ascii -NoNewline
+
+      # Signs "NetMan {version}\n{sha256}" so the app installs only builds from this workflow.
+      - name: Sign
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.NETMAN_SIGNING_KEY }}
+        run: |
+          if (-not $env:SIGNING_KEY) { throw "NETMAN_SIGNING_KEY secret is not set" }
+          $version = $env:TAG.Substring(1)
+          $hash = (Get-FileHash out/NetMan.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $message = [System.Text.Encoding]::UTF8.GetBytes("NetMan $version`n$hash")
+          $key = [System.Security.Cryptography.ECDsa]::Create()
+          $read = 0
+          $key.ImportPkcs8PrivateKey([Convert]::FromBase64String($env:SIGNING_KEY), [ref]$read)
+          $signature = $key.SignData($message, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+
+          # The app's built-in public key must match this private key, or no install would ever accept the update.
+          $embedded = (Select-String -Path src/NetMan.App/Platform/Updater.cs -Pattern 'PublicKey = "([^"]+)"').Matches[0].Groups[1].Value
+          if ([Convert]::ToBase64String($key.ExportSubjectPublicKeyInfo()) -ne $embedded) { throw "Signing key does not match the app's public key" }
+
+          Set-Content -Path out/NetMan.exe.sig -Value ([Convert]::ToBase64String($signature)) -Encoding ascii -NoNewline
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:TAG" out/NetMan.exe out/NetMan.exe.sig out/NetMan.exe.sha256 --generate-notes

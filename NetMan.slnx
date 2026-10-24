@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NetMan.App/NetMan.App.csproj" />
+    <Project Path="src/NetMan.Core/NetMan.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NetMan.Core.Tests/NetMan.Core.Tests.csproj" />
+  </Folder>
+</Solution>
