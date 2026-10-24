@@ -71,7 +71,13 @@ Every apply runs the same pipeline. Each step reports into the result panel.
    - DHCP mode: a lease that is not 169.254.x.x, waiting up to 15 seconds.
    - Disconnected adapter: compare the stored config in the registry instead, and report "Saved, adapter disconnected".
 5. **Reach.** If the profile has a ping target, send 3 pings with a 1 second timeout and report the round trip.
-6. **Result.** Applied, Partial, or Failed, with the time. Failed and Partial show which value differs (expected and actual). Undo restores the snapshot and runs the same verify.
+6. **Result.** One of:
+   - Applied: every value matches and the ping target replied, if there is one.
+   - Saved: every value matches the stored settings of a disconnected adapter.
+   - No reply: every value matches but the ping target did not answer.
+   - Failed: a pre-check, a netsh command or a value check failed. Shows the netsh message or which value differs (expected and actual).
+
+   A check still pending when polling stops counts as failed. A duplicate address stops polling at once and skips the ping. Undo restores the snapshot, clears DNS if the snapshot had none, and runs the same verify. Reset to DHCP runs the same pipeline.
 
 Every apply writes the commands, their output and each check to `%APPDATA%\NetMan\log.txt`.
 
