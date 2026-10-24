@@ -4,16 +4,15 @@ namespace NetMan.Core;
 
 public sealed class UpdateException(string message, Exception? inner = null) : Exception(message, inner);
 
-public sealed record ReleaseInfo(Version Version, Uri ExeUrl, Uri ShaUrl);
+public sealed record ReleaseInfo(Version Version, Uri ExeUrl, Uri SigUrl);
 
-/// <summary>Reads the GitHub "latest release" document and the release's checksum file.</summary>
+/// <summary>Reads the GitHub "latest release" document.</summary>
 public static class ReleaseParser
 {
     public const string ExeAsset = "NetMan.exe";
-    public const string ShaAsset = "NetMan.exe.sha256";
-    private const int Sha256HexLength = 64;
+    public const string SigAsset = "NetMan.exe.sig";
 
-    /// <summary>The release, or null when it is a draft, a prerelease, or lacks the exe or its checksum.</summary>
+    /// <summary>The release, or null when it is a draft, a prerelease, or lacks the exe or its signature.</summary>
     public static ReleaseInfo? Parse(string json)
     {
         JsonDocument document;
@@ -43,21 +42,9 @@ public static class ReleaseParser
             }
 
             var exe = AssetUrl(root, ExeAsset);
-            var sha = AssetUrl(root, ShaAsset);
-            return exe is null || sha is null ? null : new ReleaseInfo(version, exe, sha);
+            var sig = AssetUrl(root, SigAsset);
+            return exe is null || sig is null ? null : new ReleaseInfo(version, exe, sig);
         }
-    }
-
-    /// <summary>Accepts "hex" or "hex  filename" as written by sha256sum and Get-FileHash.</summary>
-    public static string ParseSha256(string text)
-    {
-        var token = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        if (token.Length != Sha256HexLength || !token.All(char.IsAsciiHexDigit))
-        {
-            throw new UpdateException("Checksum file is not a SHA-256 hash.");
-        }
-
-        return token.ToLowerInvariant();
     }
 
     private static bool IsTrue(JsonElement root, string name) =>

@@ -1,21 +1,21 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 
 namespace NetMan.Core;
 
 public sealed record UpdateSource(string Owner, string Repo);
 
-/// <summary>A downloaded, checksum-verified release waiting to be installed.</summary>
-public sealed record PendingUpdate(Version Version, string FilePath, string Sha256);
+/// <summary>A downloaded release with its signature, waiting to be installed.</summary>
+public sealed record PendingUpdate(Version Version, string FilePath, string Signature);
 
-/// <summary>Checks GitHub for a newer release and downloads it into the updates folder.</summary>
-public sealed class UpdateService(HttpClient http, UpdateSource source, string directory)
+/// <summary>Checks GitHub for a newer release, downloads it and keeps it only if its signature is valid.</summary>
+public sealed class UpdateService(HttpClient http, UpdateSource source, string directory, string publicKey)
 {
-    private const int BufferSize = 81920;
+    /// <summary>Far above the real exe size; stops a hostile server from filling memory.</summary>
+    private const long MaxExeBytes = 300L * 1024 * 1024;
 
-    /// <summary>The verified newer release, or null when there is none. Throws <see cref="UpdateException"/> on network or checksum errors.</summary>
+    /// <summary>The verified newer release, or null when there is none. Throws <see cref="UpdateException"/> on network or signature errors.</summary>
     public async Task<PendingUpdate?> CheckAsync(Version current, CancellationToken cancellationToken)
     {
         current = AppVersion.Normalize(current);
@@ -33,7 +33,7 @@ public sealed class UpdateService(HttpClient http, UpdateSource source, string d
             return null;
         }
 
-        var existing = UpdateInstaller.FindPending(directory, current);
+        var existing = UpdateInstaller.FindPending(directory, current, publicKey);
         if (existing is not null && existing.Version == release.Version)
         {
             return existing;
@@ -44,48 +44,35 @@ public sealed class UpdateService(HttpClient http, UpdateSource source, string d
 
     private async Task<PendingUpdate> DownloadAsync(ReleaseInfo release, Version current, CancellationToken ct)
     {
-        string expected;
-        using (var shaResponse = await SendAsync(release.ShaUrl, current, ct).ConfigureAwait(false))
+        string signature;
+        using (var sigResponse = await SendAsync(release.SigUrl, current, ct).ConfigureAwait(false))
         {
-            expected = ReleaseParser.ParseSha256(await shaResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+            signature = (await sigResponse.Content.ReadAsStringAsync(ct).ConfigureAwait(false)).Trim();
+        }
+
+        byte[] exe;
+        using (var exeResponse = await SendAsync(release.ExeUrl, current, ct).ConfigureAwait(false))
+        {
+            if (exeResponse.Content.Headers.ContentLength > MaxExeBytes)
+            {
+                throw new UpdateException("Update download is too large.");
+            }
+
+            exe = await exeResponse.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        }
+
+        if (exe.LongLength > MaxExeBytes || !UpdateSignature.Verify(exe, release.Version, signature, publicKey))
+        {
+            throw new UpdateException("Update signature is not valid.");
         }
 
         Directory.CreateDirectory(directory);
-        var name = string.Create(CultureInfo.InvariantCulture, $"NetMan-{release.Version}.exe");
-        var final = Path.Combine(directory, name);
+        var final = Path.Combine(directory, string.Create(CultureInfo.InvariantCulture, $"NetMan-{release.Version}.exe"));
         var part = final + ".part";
-
-        string actual;
-        try
-        {
-            using var exeResponse = await SendAsync(release.ExeUrl, current, ct).ConfigureAwait(false);
-            await using var input = await exeResponse.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            await using var output = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None, BufferSize, FileOptions.Asynchronous);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var buffer = new byte[BufferSize];
-            int read;
-            while ((read = await input.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
-            {
-                hash.AppendData(buffer, 0, read);
-                await output.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-            }
-
-            actual = Convert.ToHexStringLower(hash.GetHashAndReset());
-        }
-        catch
-        {
-            File.Delete(part);
-            throw;
-        }
-
-        if (actual != expected)
-        {
-            File.Delete(part);
-            throw new UpdateException("Downloaded update does not match its checksum.");
-        }
-
+        await File.WriteAllBytesAsync(part, exe, ct).ConfigureAwait(false);
         File.Move(part, final, overwrite: true);
-        var pending = new PendingUpdate(release.Version, final, actual);
+
+        var pending = new PendingUpdate(release.Version, final, signature);
         UpdateInstaller.WriteMarker(directory, pending);
         UpdateInstaller.DeleteOtherDownloads(directory, final);
         return pending;

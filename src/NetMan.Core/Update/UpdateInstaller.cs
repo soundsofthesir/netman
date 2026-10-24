@@ -1,12 +1,16 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace NetMan.Core;
 
 /// <summary>
 /// Swaps the running exe for a downloaded one. Windows lets a running exe be renamed but not overwritten, so the
-/// current file moves to NetMan.exe.old, the new one is copied into place, and the next launch deletes the old file.
+/// current file moves to NetMan.exe.old, the new one is written into place, and the next launch deletes the old file.
 /// </summary>
+/// <remarks>
+/// The updates folder is writable by the user's unelevated programs, and NetMan runs elevated. Nothing read from that
+/// folder is trusted: every install reads the file once, checks its signature against the built-in public key, and
+/// writes exactly the bytes it checked.
+/// </remarks>
 public static class UpdateInstaller
 {
     public const string MarkerName = "pending.json";
@@ -15,14 +19,14 @@ public static class UpdateInstaller
     public static void WriteMarker(string directory, PendingUpdate pending)
     {
         Directory.CreateDirectory(directory);
-        var marker = new Marker(pending.Version.ToString(), Path.GetFileName(pending.FilePath), pending.Sha256);
+        var marker = new Marker(pending.Version.ToString(), Path.GetFileName(pending.FilePath), pending.Signature);
         var path = Path.Combine(directory, MarkerName);
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(marker));
         File.Move(path + ".tmp", path, overwrite: true);
     }
 
-    /// <summary>The staged update when it is newer than <paramref name="current"/> and its file still matches its checksum.</summary>
-    public static PendingUpdate? FindPending(string directory, Version current)
+    /// <summary>The staged update when it is newer than <paramref name="current"/> and carries a valid signature.</summary>
+    public static PendingUpdate? FindPending(string directory, Version current, string publicKey)
     {
         var path = Path.Combine(directory, MarkerName);
         if (!File.Exists(path))
@@ -40,7 +44,7 @@ public static class UpdateInstaller
             return null;
         }
 
-        if (marker?.File is null || marker.Sha256 is null || !AppVersion.TryParse(marker.Version, out var version)
+        if (marker?.File is null || marker.Signature is null || !AppVersion.TryParse(marker.Version, out var version)
             || version <= AppVersion.Normalize(current))
         {
             return null;
@@ -48,14 +52,17 @@ public static class UpdateInstaller
 
         // Only a bare file name inside the updates folder, never a path from the marker.
         var file = Path.Combine(directory, Path.GetFileName(marker.File));
-        return File.Exists(file) && HashFile(file) == marker.Sha256 ? new PendingUpdate(version, file, marker.Sha256) : null;
+        return File.Exists(file) && UpdateSignature.Verify(File.ReadAllBytes(file), version, marker.Signature, publicKey)
+            ? new PendingUpdate(version, file, marker.Signature)
+            : null;
     }
 
-    public static void Install(PendingUpdate pending, string exePath, string directory)
+    public static void Install(PendingUpdate pending, string exePath, string directory, string publicKey)
     {
-        if (HashFile(pending.FilePath) != pending.Sha256)
+        var bytes = File.ReadAllBytes(pending.FilePath);
+        if (!UpdateSignature.Verify(bytes, pending.Version, pending.Signature, publicKey))
         {
-            throw new UpdateException("Update file changed after download.");
+            throw new UpdateException("Update signature is not valid.");
         }
 
         var old = exePath + OldSuffix;
@@ -67,7 +74,7 @@ public static class UpdateInstaller
         File.Move(exePath, old);
         try
         {
-            File.Copy(pending.FilePath, exePath, overwrite: false);
+            File.WriteAllBytes(exePath, bytes);
         }
         catch
         {
@@ -112,11 +119,5 @@ public static class UpdateInstaller
         }
     }
 
-    private static string HashFile(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexStringLower(SHA256.HashData(stream));
-    }
-
-    private sealed record Marker(string? Version, string? File, string? Sha256);
+    private sealed record Marker(string? Version, string? File, string? Signature);
 }

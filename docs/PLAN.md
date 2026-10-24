@@ -83,13 +83,14 @@ Every apply writes the commands, their output and each check to `%APPDATA%\NetMa
 
 ## Updates
 
-Releases live at github.com/soundsofthesir/netman (public). A tag `vX.Y.Z` runs the release workflow, which tests, publishes the self-contained exe, and attaches `NetMan.exe` and `NetMan.exe.sha256` to a GitHub release.
+Releases live at github.com/soundsofthesir/netman (public). A tag `vX.Y.Z` runs the release workflow, which tests, publishes the self-contained exe, and signs the exe, and attaches `NetMan.exe`, `NetMan.exe.sig` and `NetMan.exe.sha256` to a GitHub release. The signature is ECDSA P-256 over `NetMan {version}\n{sha256}`. The private key is the `NETMAN_SIGNING_KEY` Actions secret; the app holds the public key.
 
 1. On launch and every 12 hours, a background task reads the latest release from the GitHub API.
-2. If it is newer, it downloads `NetMan.exe` to `%LOCALAPPDATA%\NetMan\updates`, checks it against the release's SHA-256 file and records it as pending.
+2. If it is newer, it downloads `NetMan.exe` to `%LOCALAPPDATA%\NetMan\updates`, checks its signature against the built-in public key and records it as pending.
 3. An "Update to X.Y.Z" button appears under Reset to DHCP. It installs now and restarts. Otherwise the next launch installs before the window opens.
-4. Install renames the running exe to `NetMan.exe.old`, copies the new one into place and starts it. If the copy fails, the old exe is put back. The next launch deletes `NetMan.exe.old`.
-5. Version 0.0.0 marks a development build, which never checks for updates. Every step goes to the log.
+4. NetMan runs elevated but the updates folder is writable by the user's other programs, so nothing in it is trusted. Install reads the file once, checks the signature again, and writes exactly those bytes. Because the version is signed, an older signed build cannot be installed as a newer one.
+5. Install renames the running exe to `NetMan.exe.old`, copies the new one into place and starts it. If the copy fails, the old exe is put back. The next launch deletes `NetMan.exe.old`.
+6. Version 0.0.0 marks a development build, which never checks for updates. Every step goes to the log.
 
 ## Technical approach
 

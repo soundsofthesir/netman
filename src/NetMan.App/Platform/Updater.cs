@@ -9,6 +9,9 @@ internal sealed class Updater
 {
     public static readonly UpdateSource Source = new("soundsofthesir", "netman");
 
+    // Public half of the release signing key. The private half is the NETMAN_SIGNING_KEY Actions secret.
+    public const string PublicKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECrfIVuDirm6CZvlKF8/bcHNjTrybYXajBh4ve6VFC2F5HdkBR8g1EuoCUEf6Xv2jpLda92wnc3ocxiFK0Uf0yg==";
+
     private const string ExeName = "NetMan.exe";
     private const int CleanupAttempts = 10;
     private static readonly TimeSpan CleanupDelay = TimeSpan.FromMilliseconds(300);
@@ -41,14 +44,14 @@ internal sealed class Updater
         }
 
         var http = new HttpClient { Timeout = HttpTimeout };
-        return new Updater(new UpdateService(http, Source, AppPaths.Updates), exe, AppVersion.Normalize(version), log);
+        return new Updater(new UpdateService(http, Source, AppPaths.Updates, PublicKey), exe, AppVersion.Normalize(version), log);
     }
 
     /// <summary>Runs before the window opens. True when the new version has started and this process should exit.</summary>
     public bool InstallPendingAndRestart()
     {
         RemoveOldExe();
-        var pending = UpdateInstaller.FindPending(AppPaths.Updates, Current);
+        var pending = UpdateInstaller.FindPending(AppPaths.Updates, Current, PublicKey);
         if (pending is null)
         {
             return false;
@@ -69,7 +72,7 @@ internal sealed class Updater
     /// <summary>Swaps the exe and starts the new version. The caller closes this process.</summary>
     public void InstallAndRestart(PendingUpdate pending)
     {
-        UpdateInstaller.Install(pending, ExePath, AppPaths.Updates);
+        UpdateInstaller.Install(pending, ExePath, AppPaths.Updates, PublicKey);
         _log.Write($"Installed update {pending.Version}");
 
         // Started from this elevated process, the new one inherits elevation without a second UAC prompt.
